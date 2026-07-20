@@ -6,6 +6,7 @@ declare module "framer" {
     Enum: string
     Boolean: string
     Font: string
+    Array: string
     EventHandler: string
     Transition: string
   }
