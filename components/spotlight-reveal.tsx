@@ -20,13 +20,13 @@ type Props = {
     font: FontStyle
     color: string
 
-    startOpacity: number
-    startScale: number
     blur: number
     staggerFrom: StaggerFrom
 
     transition: TransitionValue
 }
+
+const START_SCALE = 1.45
 
 const mapEase = (ease: TransitionValue["ease"]): string => {
     if (typeof ease !== "string") return "power2.out"
@@ -53,8 +53,6 @@ export default function SpotlightReveal({
     font,
     color,
 
-    startOpacity,
-    startScale,
     blur,
     staggerFrom,
 
@@ -74,8 +72,8 @@ export default function SpotlightReveal({
         })
 
         gsap.from(chars, {
-            opacity: startOpacity / 100,
-            scale: startScale,
+            opacity: 0,
+            scale: START_SCALE,
             filter: `blur(${blur}px)`,
 
             duration: transition.duration ?? 0.4,
@@ -86,7 +84,7 @@ export default function SpotlightReveal({
             },
             ease: mapEase(transition.ease),
         })
-    }, [text, startOpacity, startScale, blur, staggerFrom, transition])
+    }, [text, blur, staggerFrom, transition])
 
     return (
         <h1
@@ -125,9 +123,7 @@ SpotlightReveal.defaultProps = {
     },
     color: "#111111",
 
-    startOpacity: 10,
-    startScale: 0.8,
-    blur: 4,
+    blur: 20,
     staggerFrom: "center",
 
     transition: {
@@ -166,29 +162,13 @@ addPropertyControls(SpotlightReveal, {
         title: "Color",
     },
 
-    startOpacity: {
-        type: ControlType.Number,
-        title: "Opacity",
-        min: 0,
-        max: 100,
-        step: 1,
-        unit: "%",
-    },
-
-    startScale: {
-        type: ControlType.Number,
-        title: "Scale",
-        min: 0,
-        max: 2,
-        step: 0.05,
-    },
-
     blur: {
         type: ControlType.Number,
         title: "Blur",
-        min: 0,
-        max: 20,
+        min: 15,
+        max: 50,
         step: 1,
+        unit: "px",
     },
 
     staggerFrom: {

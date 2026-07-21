@@ -165,8 +165,8 @@ addPropertyControls(MatrixRain, {
     startY: {
         type: ControlType.Number,
         title: "Y Offset",
-        min: -500,
-        max: 500,
+        min: -200,
+        max: 200,
         step: 5,
     },
 
