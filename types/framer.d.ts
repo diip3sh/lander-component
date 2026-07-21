@@ -7,6 +7,7 @@ declare module "framer" {
     Boolean: string
     Font: string
     Array: string
+    File: string
     EventHandler: string
     Transition: string
   }

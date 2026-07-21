@@ -73,7 +73,7 @@ export default function MatrixRain({
 
         gsap.from(chars, {
             y: startY,
-            opacity: startOpacity,
+            opacity: startOpacity / 100,
 
             duration: transition.duration ?? 0.5,
             delay: transition.delay ?? 0,
@@ -174,8 +174,9 @@ addPropertyControls(MatrixRain, {
         type: ControlType.Number,
         title: "Opacity",
         min: 0,
-        max: 1,
-        step: 0.05,
+        max: 100,
+        step: 1,
+        unit: "%",
     },
 
     staggerFrom: {

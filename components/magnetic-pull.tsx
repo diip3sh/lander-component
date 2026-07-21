@@ -18,13 +18,14 @@ type Props = {
     font: FontStyle
     color: string
 
-    scatterX: number
-    scatterY: number
     startRotation: number
     startOpacity: number
 
     transition: TransitionValue
 }
+
+const SCATTER_X = 200
+const SCATTER_Y = 200
 
 const mapEase = (ease: TransitionValue["ease"]): string => {
     if (typeof ease !== "string") return "power3.out"
@@ -51,8 +52,6 @@ export default function MagneticPull({
     font,
     color,
 
-    scatterX,
-    scatterY,
     startRotation,
     startOpacity,
 
@@ -72,9 +71,9 @@ export default function MagneticPull({
         })
 
         gsap.from(chars, {
-            x: () => gsap.utils.random(-scatterX, scatterX),
-            y: () => gsap.utils.random(-scatterY, scatterY),
-            opacity: startOpacity,
+            x: () => gsap.utils.random(-SCATTER_X, SCATTER_X),
+            y: () => gsap.utils.random(-SCATTER_Y, SCATTER_Y),
+            opacity: startOpacity / 100,
             rotation: () => gsap.utils.random(-startRotation, startRotation),
 
             duration: transition.duration ?? 1,
@@ -82,14 +81,7 @@ export default function MagneticPull({
             stagger: transition.staggerChildren ?? 0.02,
             ease: mapEase(transition.ease),
         })
-    }, [
-        text,
-        scatterX,
-        scatterY,
-        startRotation,
-        startOpacity,
-        transition,
-    ])
+    }, [text, startRotation, startOpacity, transition])
 
     return (
         <h1
@@ -128,8 +120,6 @@ MagneticPull.defaultProps = {
     },
     color: "#111111",
 
-    scatterX: 200,
-    scatterY: 200,
     startRotation: 90,
     startOpacity: 0,
 
@@ -169,36 +159,22 @@ addPropertyControls(MagneticPull, {
         title: "Color",
     },
 
-    scatterX: {
-        type: ControlType.Number,
-        title: "Scatter X",
-        min: 0,
-        max: 500,
-        step: 10,
-    },
-
-    scatterY: {
-        type: ControlType.Number,
-        title: "Scatter Y",
-        min: 0,
-        max: 500,
-        step: 10,
-    },
-
     startRotation: {
         type: ControlType.Number,
         title: "Rotation",
         min: 0,
         max: 360,
         step: 1,
+        unit: "°",
     },
 
     startOpacity: {
         type: ControlType.Number,
         title: "Opacity",
         min: 0,
-        max: 1,
-        step: 0.05,
+        max: 100,
+        step: 1,
+        unit: "%",
     },
 
     transition: {

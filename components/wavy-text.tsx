@@ -10,7 +10,6 @@ type TransitionValue = {
     duration?: number
     delay?: number
     ease?: string | number[]
-    staggerChildren?: number
 }
 
 type Props = {
@@ -18,7 +17,8 @@ type Props = {
     font: FontStyle
     color: string
 
-    amplitudeRatio: number
+    range: number
+    stagger: number
 
     transition: TransitionValue
 }
@@ -43,22 +43,13 @@ const mapEase = (ease: TransitionValue["ease"]): string => {
     return easeMap[ease] ?? ease
 }
 
-const getFontSize = (font: FontStyle, element: HTMLElement): number => {
-    const fromProp = font.fontSize
-    if (typeof fromProp === "number") return fromProp
-    if (typeof fromProp === "string") {
-        const parsed = Number.parseFloat(fromProp)
-        if (!Number.isNaN(parsed)) return parsed
-    }
-    return Number.parseFloat(getComputedStyle(element).fontSize) || 80
-}
-
 export default function WavyText({
     text,
     font,
     color,
 
-    amplitudeRatio,
+    range,
+    stagger,
 
     transition,
 }: Props) {
@@ -77,27 +68,25 @@ export default function WavyText({
             clearProps: "transform",
         })
 
-        const fontSize = getFontSize(font, chars[0])
-        const amplitude = fontSize * amplitudeRatio
-        const staggerEach = transition.staggerChildren ?? 0.15
         const duration = transition.duration ?? 2
         const delay = transition.delay ?? 0
+        const ease = mapEase(transition.ease)
 
         chars.forEach((char, index) => {
             gsap.fromTo(
                 char,
-                { y: -amplitude },
+                { y: -range },
                 {
-                    y: amplitude,
+                    y: range,
                     duration,
-                    delay: delay + index * staggerEach - chars.length * staggerEach,
-                    ease: mapEase(transition.ease),
+                    delay: delay + index * stagger - chars.length * stagger,
+                    ease,
                     repeat: -1,
                     yoyo: true,
                 },
             )
         })
-    }, [text, font, amplitudeRatio, transition])
+    }, [text, font, range, stagger, transition])
 
     return (
         <h1
@@ -136,17 +125,18 @@ WavyText.defaultProps = {
         letterSpacing: "-0.025em",
         lineHeight: "1.1em",
         variant: "Medium",
+        textAlign: "left",
     },
     color: "#ffffff",
 
-    amplitudeRatio: 0.35,
+    range: 48,
+    stagger: 0.15,
 
     transition: {
         type: "tween",
         duration: 2,
         delay: 0,
         ease: "easeInOut",
-        staggerChildren: 0.15,
     },
 }
 
@@ -177,13 +167,22 @@ addPropertyControls(WavyText, {
         title: "Color",
     },
 
-    amplitudeRatio: {
+    range: {
         type: ControlType.Number,
-        title: "Amplitude",
-        min: 0.05,
-        max: 1,
-        step: 0.05,
-        displayStepper: true,
+        title: "Range",
+        min: 0,
+        max: 200,
+        step: 1,
+        unit: "px",
+    },
+
+    stagger: {
+        type: ControlType.Number,
+        title: "Stagger",
+        min: 0.1,
+        max: 0.5,
+        step: 0.01,
+        unit: "s",
     },
 
     transition: {
@@ -194,7 +193,6 @@ addPropertyControls(WavyText, {
             duration: 2,
             delay: 0,
             ease: "easeInOut",
-            staggerChildren: 0.15,
         },
     },
 })

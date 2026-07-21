@@ -76,7 +76,7 @@ export default function FlipBoard({
 
     gsap.from(chars, {
       rotationX: startRotationX,
-      opacity: startOpacity,
+      opacity: startOpacity / 100,
       transformOrigin,
 
       duration: transition.duration ?? 0.3,
@@ -188,8 +188,9 @@ addPropertyControls(FlipBoard, {
     type: ControlType.Number,
     title: "Opacity",
     min: 0,
-    max: 1,
-    step: 0.05,
+    max: 100,
+    step: 1,
+    unit: "%",
   },
 
   transformOrigin: {

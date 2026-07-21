@@ -74,7 +74,7 @@ export default function SpotlightReveal({
         })
 
         gsap.from(chars, {
-            opacity: startOpacity,
+            opacity: startOpacity / 100,
             scale: startScale,
             filter: `blur(${blur}px)`,
 
@@ -125,7 +125,7 @@ SpotlightReveal.defaultProps = {
     },
     color: "#111111",
 
-    startOpacity: 0.1,
+    startOpacity: 10,
     startScale: 0.8,
     blur: 4,
     staggerFrom: "center",
@@ -170,8 +170,9 @@ addPropertyControls(SpotlightReveal, {
         type: ControlType.Number,
         title: "Opacity",
         min: 0,
-        max: 1,
-        step: 0.05,
+        max: 100,
+        step: 1,
+        unit: "%",
     },
 
     startScale: {
