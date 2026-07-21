@@ -36,12 +36,12 @@ type Props = {
     splitBy: SplitBy
     staggerFrom: StaggerFrom
 
-    rotationInterval: number
-    loop: boolean
     auto: boolean
 
     transition: TransitionValue
 }
+
+const ROTATION_INTERVAL_MS = 2000
 
 const mapEase = (ease: TransitionValue["ease"]): string => {
     if (typeof ease !== "string") return "power2.out"
@@ -116,8 +116,6 @@ export default function RotatingText({
     splitBy,
     staggerFrom,
 
-    rotationInterval,
-    loop,
     auto,
 
     transition,
@@ -148,7 +146,7 @@ export default function RotatingText({
         if (!auto || safeTexts.length <= 1) return
 
         const getNextIndex = (index: number) => {
-            if (index >= safeTexts.length - 1) return loop ? 0 : index
+            if (index >= safeTexts.length - 1) return 0
             return index + 1
         }
 
@@ -184,17 +182,10 @@ export default function RotatingText({
                     setCurrentTextIndex((index) => getNextIndex(index))
                 },
             })
-        }, rotationInterval)
+        }, ROTATION_INTERVAL_MS)
 
         return () => window.clearInterval(intervalId)
-    }, [
-        auto,
-        loop,
-        rotationInterval,
-        safeTexts.length,
-        staggerFrom,
-        transition,
-    ])
+    }, [auto, safeTexts.length, staggerFrom, transition])
 
     useEffect(() => {
         const content = contentRef.current
@@ -388,8 +379,6 @@ RotatingText.defaultProps = {
     splitBy: "characters",
     staggerFrom: "first",
 
-    rotationInterval: 2000,
-    loop: true,
     auto: true,
 
     transition: {
@@ -499,25 +488,9 @@ addPropertyControls(RotatingText, {
         hidden: (props: Props) => props.splitBy !== "characters",
     },
 
-    rotationInterval: {
-        type: ControlType.Number,
-        title: "Interval",
-        min: 500,
-        max: 10000,
-        step: 100,
-        unit: "ms",
-    },
-
     auto: {
         type: ControlType.Boolean,
         title: "Auto",
-        enabledTitle: "On",
-        disabledTitle: "Off",
-    },
-
-    loop: {
-        type: ControlType.Boolean,
-        title: "Loop",
         enabledTitle: "On",
         disabledTitle: "Off",
     },

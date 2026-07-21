@@ -257,11 +257,11 @@ export default function FuzzyText({
                 )
 
                 const { hovering, clicking } = interactionRef.current
-                let currentIntensity = baseIntensity
+                let currentIntensity = baseIntensity / 10
                 if (clicking || isGlitching) {
                     currentIntensity = clicking ? clickIntensity : 1
                 } else if (hovering) {
-                    currentIntensity = hoverIntensity
+                    currentIntensity = hoverIntensity / 10
                 }
 
                 for (let j = 0; j < tightHeight; j++) {
@@ -361,8 +361,8 @@ FuzzyText.defaultProps = {
     color: "#ffffff",
 
     enableHover: true,
-    baseIntensity: 0.18,
-    hoverIntensity: 0.5,
+    baseIntensity: 2,
+    hoverIntensity: 5,
     clickIntensity: 1,
     fuzzRange: 30,
     fps: 60,
@@ -420,16 +420,16 @@ addPropertyControls(FuzzyText, {
         type: ControlType.Number,
         title: "Base Intensity",
         min: 0,
-        max: 1,
-        step: 0.01,
+        max: 10,
+        step: 1,
     },
 
     hoverIntensity: {
         type: ControlType.Number,
         title: "Hover Intensity",
         min: 0,
-        max: 1,
-        step: 0.01,
+        max: 10,
+        step: 1,
     },
 
     clickEffect: {
