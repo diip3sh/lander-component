@@ -626,7 +626,7 @@ export const generateTextTargets = (
 export default function CustomHover(props: Props) {
   const {
     text = "cellular symbiosis",
-    color = "#000000",
+    color = "#FFFFFF",
     background = "transparent",
     dotSize = 8.6,
     cellScale = 1.65,
