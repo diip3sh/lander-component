@@ -4,7 +4,8 @@ import * as React from "react"
 import { useEffect, useRef } from "react"
 import { addPropertyControls, ControlType } from "framer"
 
-type PaletteMode = "mono" | "color" | "customize"
+type PaletteMode = "mono" | "color" | "custom"
+type WindDirection = "left" | "right"
 type FireCharset = "classic" | "dense" | "blocks" | "minimal"
 
 type FireParticle = {
@@ -21,7 +22,8 @@ type FireParticle = {
 
 type AsciiFireOptions = {
     intensity: number
-    wind: number
+    windDirection: WindDirection
+    windForce: number
     decay: number
     turbulence: number
     thickness: number
@@ -31,7 +33,6 @@ type AsciiFireOptions = {
     palette: PaletteMode
     shades: string[]
     charset: FireCharset
-    fontSize: number
     backgroundColor: string
 }
 
@@ -39,17 +40,19 @@ type Props = Partial<AsciiFireOptions> & {
     style?: React.CSSProperties
 }
 
-type FireConfig = Pick<
-    AsciiFireOptions,
-    | "intensity"
-    | "wind"
-    | "decay"
-    | "turbulence"
-    | "thickness"
-    | "embers"
-    | "sparks"
-    | "pulse"
->
+type FireConfig = {
+    intensity: number
+    /** Signed wind: negative = left, positive = right. */
+    wind: number
+    decay: number
+    turbulence: number
+    thickness: number
+    embers: boolean
+    sparks: boolean
+    pulse: boolean
+}
+
+const FONT_SIZE = 10
 
 const CHARSETS: Record<FireCharset, string> = {
     classic: " .:-=+*#%@",
@@ -80,7 +83,8 @@ const MONO_PALETTE = [
 
 const DEFAULT_FIRE_OPTIONS: AsciiFireOptions = {
     intensity: 82,
-    wind: 0,
+    windDirection: "right",
+    windForce: 10,
     decay: 4,
     turbulence: 58,
     thickness: 3,
@@ -90,7 +94,6 @@ const DEFAULT_FIRE_OPTIONS: AsciiFireOptions = {
     palette: "mono",
     shades: [...COLOR_PALETTE],
     charset: "classic",
-    fontSize: 12,
     backgroundColor: "#000000",
 }
 
@@ -98,6 +101,14 @@ const FPS = 30
 
 const clamp = (value: number, minimum: number, maximum: number): number =>
     Math.min(Math.max(value, minimum), maximum)
+
+const resolveWind = (
+    direction: WindDirection,
+    force: number
+): number => {
+    const amount = clamp(force, 10, 100)
+    return direction === "left" ? -amount : amount
+}
 
 const seedFuel = (
     heat: Float32Array,
@@ -308,7 +319,8 @@ const renderFire = (
 export default function AsciiFire(props: Props) {
     const {
         intensity = DEFAULT_FIRE_OPTIONS.intensity,
-        wind = DEFAULT_FIRE_OPTIONS.wind,
+        windDirection = DEFAULT_FIRE_OPTIONS.windDirection,
+        windForce = DEFAULT_FIRE_OPTIONS.windForce,
         decay = DEFAULT_FIRE_OPTIONS.decay,
         turbulence = DEFAULT_FIRE_OPTIONS.turbulence,
         thickness = DEFAULT_FIRE_OPTIONS.thickness,
@@ -318,17 +330,17 @@ export default function AsciiFire(props: Props) {
         palette = DEFAULT_FIRE_OPTIONS.palette,
         shades = DEFAULT_FIRE_OPTIONS.shades,
         charset = DEFAULT_FIRE_OPTIONS.charset,
-        fontSize = DEFAULT_FIRE_OPTIONS.fontSize,
         backgroundColor = DEFAULT_FIRE_OPTIONS.backgroundColor,
         style,
     } = props
 
     const containerRef = useRef<HTMLDivElement>(null)
     const outputRef = useRef<HTMLPreElement>(null)
+    const wind = resolveWind(windDirection, windForce)
     const activePalette =
         palette === "color"
             ? COLOR_PALETTE
-            : palette === "customize"
+            : palette === "custom"
               ? shades.length > 0
                   ? shades
                   : COLOR_PALETTE
@@ -370,12 +382,12 @@ export default function AsciiFire(props: Props) {
 
             const fontFamily =
                 "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace"
-            const lineHeight = fontSize * 1.05
+            const lineHeight = FONT_SIZE * 1.05
             if (measurementContext) {
-                measurementContext.font = `${fontSize}px ${fontFamily}`
+                measurementContext.font = `${FONT_SIZE}px ${fontFamily}`
             }
             const characterWidth =
-                measurementContext?.measureText("M").width || fontSize * 0.6
+                measurementContext?.measureText("M").width || FONT_SIZE * 0.6
             const nextColumns = Math.max(1, Math.floor(width / characterWidth))
             const nextRows = Math.max(1, Math.floor(height / lineHeight))
             if (nextColumns === columns && nextRows === rows) return
@@ -446,7 +458,6 @@ export default function AsciiFire(props: Props) {
         pulse,
         activePalette,
         charset,
-        fontSize,
     ])
 
     return (
@@ -476,7 +487,7 @@ export default function AsciiFire(props: Props) {
                     userSelect: "none",
                     fontFamily:
                         "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-                    fontSize,
+                    fontSize: FONT_SIZE,
                     fontVariantLigatures: "none",
                     lineHeight: 1.05,
                     whiteSpace: "pre",
@@ -493,8 +504,8 @@ addPropertyControls(AsciiFire, {
     palette: {
         type: ControlType.Enum,
         title: "Palette",
-        options: ["mono", "color", "customize"],
-        optionTitles: ["Mono", "Color", "Customize"],
+        options: ["mono", "color", "custom"],
+        optionTitles: ["Mono", "Default", "Custom"],
         displaySegmentedControl: false,
     },
     shades: {
@@ -505,7 +516,7 @@ addPropertyControls(AsciiFire, {
             type: ControlType.Color,
         },
         defaultValue: [...COLOR_PALETTE],
-        hidden: (props: Props) => props.palette !== "customize",
+        hidden: (props: Props) => props.palette !== "custom",
     },
     charset: {
         type: ControlType.Enum,
@@ -522,10 +533,17 @@ addPropertyControls(AsciiFire, {
         step: 1,
         unit: "%",
     },
-    wind: {
+    windDirection: {
+        type: ControlType.Enum,
+        title: "Direction",
+        options: ["left", "right"],
+        optionTitles: ["Left", "Right"],
+        displaySegmentedControl: false,
+    },
+    windForce: {
         type: ControlType.Number,
-        title: "Wind",
-        min: -100,
+        title: "Wind Force",
+        min: 10,
         max: 100,
         step: 1,
     },
@@ -568,14 +586,6 @@ addPropertyControls(AsciiFire, {
         title: "Pulse",
         enabledTitle: "On",
         disabledTitle: "Off",
-    },
-    fontSize: {
-        type: ControlType.Number,
-        title: "Font Size",
-        min: 6,
-        max: 24,
-        step: 1,
-        unit: "px",
     },
     backgroundColor: {
         type: ControlType.Color,
