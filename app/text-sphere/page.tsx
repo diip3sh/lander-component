@@ -1,5 +1,5 @@
-import TextSphere from "@/components/text-sphere";
+import TextRevealBlur from "@/components/text-reveal-blur";
 
 export default function TextSpherePage() {
-  return <TextSphere />;
+  return <TextRevealBlur />;
 }

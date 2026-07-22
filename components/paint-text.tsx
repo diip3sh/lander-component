@@ -1,6 +1,7 @@
+"use client";
+
 import * as React from "react";
-import { useCallback, useEffect, useMemo, useRef } from "react";
-import { animate } from "framer-motion";
+import { useEffect, useMemo, useRef } from "react";
 import { addPropertyControls, ControlType } from "framer";
 
 type FontStyle = React.CSSProperties & {
@@ -11,30 +12,38 @@ type FontStyle = React.CSSProperties & {
   lineHeight?: number | string;
 };
 
-type TransitionValue = {
-  type?: string;
-  duration?: number;
-  delay?: number;
-  ease?: string | number[];
-  staggerChildren?: number;
-};
-
 type Props = {
   text?: string;
-  hint?: string;
-  showHint?: boolean;
   font?: FontStyle;
   paintColor?: string;
   ghostColor?: string;
-  hintColor?: string;
-  brushRadius?: number;
   autoReset?: boolean;
   autoResetDelay?: number;
-  transition?: TransitionValue;
   style?: React.CSSProperties;
 };
 
-type CharCenter = { x: number; y: number; paintable: boolean };
+type Point = {
+  x: number;
+  y: number;
+};
+
+type PointerSegment = {
+  end: Point;
+  eventTime: number;
+  start: Point;
+};
+
+type GlyphGeometry = {
+  paintable: boolean;
+  x: number;
+  y: number;
+};
+
+type LocalSpace = {
+  rect: DOMRect;
+  scaleX: number;
+  scaleY: number;
+};
 
 const DEFAULT_FONT: FontStyle = {
   fontSize: "72px",
@@ -43,22 +52,75 @@ const DEFAULT_FONT: FontStyle = {
   textAlign: "center",
 };
 
-const DEFAULT_TRANSITION: TransitionValue = {
-  type: "tween",
-  duration: 0.28,
-  delay: 0.14,
-  ease: "easeOut",
+const PAINT_RESPONSE_MS = 90;
+const RESET_FADE_MS = 600;
+const BRUSH_TO_FONT_RATIO = 1.5;
+const MINIMUM_BRUSH_RADIUS = 12;
+const MAX_PENDING_SEGMENTS = 64;
+const PROGRESS_EPSILON = 0.0001;
+
+const isSpace = (character: string): boolean =>
+  character === " " || character === "\n" || character === "\t";
+
+const prefersReducedMotion = (): boolean =>
+  typeof window !== "undefined" &&
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+const clamp = (value: number, min: number, max: number): number =>
+  Math.min(max, Math.max(min, value));
+
+const getDistanceToSegment = (
+  point: Point,
+  start: Point,
+  end: Point,
+): number => {
+  const segmentX = end.x - start.x;
+  const segmentY = end.y - start.y;
+  const lengthSquared = segmentX * segmentX + segmentY * segmentY;
+
+  if (lengthSquared === 0) {
+    return Math.hypot(point.x - start.x, point.y - start.y);
+  }
+
+  const projection = clamp(
+    ((point.x - start.x) * segmentX + (point.y - start.y) * segmentY) /
+      lengthSquared,
+    0,
+    1,
+  );
+  const nearestX = start.x + segmentX * projection;
+  const nearestY = start.y + segmentY * projection;
+  return Math.hypot(point.x - nearestX, point.y - nearestY);
 };
 
-const prefersReducedMotion = (): boolean => {
-  if (typeof window === "undefined") return false;
-  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const getProximityFalloff = (distance: number, radius: number): number => {
+  const proximity = clamp(1 - distance / radius, 0, 1);
+  return proximity * proximity * (3 - 2 * proximity);
 };
 
-const isSpace = (char: string): boolean =>
-  char === " " || char === "\n" || char === "\t";
+const segmentIntersectsExpandedRect = (
+  segment: PointerSegment,
+  rect: DOMRect,
+  padding: number,
+): boolean => {
+  const minX = Math.min(segment.start.x, segment.end.x);
+  const maxX = Math.max(segment.start.x, segment.end.x);
+  const minY = Math.min(segment.start.y, segment.end.y);
+  const maxY = Math.max(segment.start.y, segment.end.y);
+
+  return (
+    maxX >= rect.left - padding &&
+    minX <= rect.right + padding &&
+    maxY >= rect.top - padding &&
+    minY <= rect.bottom + padding
+  );
+};
 
 /**
+ * Dwell-sensitive glyph painter with continuous swept-path hit testing.
+ * Fast movement leaves a light ghost/paint blend; slow movement reaches the
+ * full selected paint color.
+ *
  * @framerSupportedLayoutWidth any
  * @framerSupportedLayoutHeight any
  * @framerIntrinsicWidth 520
@@ -67,221 +129,318 @@ const isSpace = (char: string): boolean =>
 export default function PaintText(props: Props) {
   const {
     text = "paint me",
-    hint = "drag your cursor to reveal the words",
-    showHint = true,
     font = DEFAULT_FONT,
     paintColor = "#FFFFFF",
-    ghostColor = "#525252",
-    hintColor = "#737373",
-    brushRadius = 56,
+    ghostColor = "rgba(127, 127, 127, 0.22)",
     autoReset = true,
     autoResetDelay = 2.8,
-    transition = DEFAULT_TRANSITION,
     style,
   } = props;
 
-  // Transition duration → paint time; delay → stagger
-  const paintDuration = transition.duration ?? DEFAULT_TRANSITION.duration ?? 0.28;
-  const stagger = transition.delay ?? DEFAULT_TRANSITION.delay ?? 0.14;
-
-  const chars = useMemo(() => Array.from(text ?? ""), [text]);
-  const autoResetMs = autoReset ? Math.max(0, autoResetDelay) * 1000 : 0;
-  const staggerMs = Math.max(0, stagger) * 1000;
-
+  const characters = useMemo(() => Array.from(text), [text]);
   const wrapperRef = useRef<HTMLParagraphElement>(null);
-  const charRefs = useRef<(HTMLSpanElement | null)[]>([]);
-  const centersRef = useRef<CharCenter[]>([]);
-  const paintedRef = useRef<Set<number>>(new Set());
-  const pendingRef = useRef<Set<number>>(new Set());
-  const staggerTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
-  const rafRef = useRef<number | null>(null);
-  const pointerRef = useRef<{ x: number; y: number } | null>(null);
-  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const reducedMotionRef = useRef(false);
+  const glyphRefs = useRef<(HTMLSpanElement | null)[]>([]);
+  const ghostRefs = useRef<(HTMLSpanElement | null)[]>([]);
+  const paintRefs = useRef<(HTMLSpanElement | null)[]>([]);
 
-  const applyGhostStyle = useCallback(
-    (node: HTMLSpanElement) => {
-      node.style.color = ghostColor;
-      node.style.opacity = "1";
-      node.style.webkitTextStroke = "0px transparent";
-      node.style.filter = "none";
-      node.style.transition = "none";
-    },
-    [ghostColor],
-  );
+  const autoResetMs = autoReset ? Math.max(0, autoResetDelay) * 1000 : 0;
 
-  const applyPaintStyle = useCallback(
-    (node: HTMLSpanElement, instant = false) => {
-      const duration = instant || reducedMotionRef.current ? 0 : paintDuration;
+  useEffect(() => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
 
-      node.style.webkitTextStroke = "0px transparent";
-      node.style.opacity = "1";
+    let cancelled = false;
+    let frameId: number | null = null;
+    let resetTimer: ReturnType<typeof setTimeout> | null = null;
+    let previousFrameTime = performance.now();
+    let previousPointer: Point | null = null;
+    let currentPointer: Point | null = null;
+    let lastPointerMoveTime = 0;
+    let brushRadius = 108;
+    let glyphGeometry: GlyphGeometry[] = [];
+    let pendingSegments: PointerSegment[] = [];
+    const paintProgress = characters.map(() => 0);
+    const lastContactTimes = characters.map(() => 0);
+    const reducedMotion = prefersReducedMotion();
 
-      if (duration <= 0) {
-        node.style.color = paintColor;
-        return;
+    const applyProgress = (index: number, progress: number) => {
+      const ghost = ghostRefs.current[index];
+      const paint = paintRefs.current[index];
+      if (!ghost || !paint) return;
+
+      const previousProgress = paintProgress[index] ?? 0;
+      if (Math.abs(previousProgress - progress) < PROGRESS_EPSILON) return;
+
+      paintProgress[index] = progress;
+      paint.style.opacity = String(progress);
+      ghost.style.opacity = String(1 - progress);
+    };
+
+    const resetAllGlyphs = () => {
+      for (let index = 0; index < characters.length; index += 1) {
+        paintProgress[index] = 0;
+        lastContactTimes[index] = 0;
+
+        const ghost = ghostRefs.current[index];
+        const paint = paintRefs.current[index];
+        if (ghost) ghost.style.opacity = "1";
+        if (paint) paint.style.opacity = "0";
       }
+    };
 
-      animate(
-        node,
-        {
-          color: [ghostColor, paintColor],
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any,
-        {
-          duration,
-          ease: [0.215, 0.61, 0.355, 1],
-        },
-      );
-    },
-    [ghostColor, paintColor, paintDuration],
-  );
+    const getLocalSpace = (): LocalSpace => {
+      const rect = wrapper.getBoundingClientRect();
 
-  const clearStaggerTimers = useCallback(() => {
-    staggerTimersRef.current.forEach((timer) => clearTimeout(timer));
-    staggerTimersRef.current = [];
-    pendingRef.current.clear();
-  }, []);
-
-  const measureCenters = useCallback(() => {
-    centersRef.current = charRefs.current.map((node, index) => {
-      if (!node || isSpace(chars[index]!)) {
-        return { x: 0, y: 0, paintable: false };
-      }
-
-      const rect = node.getBoundingClientRect();
       return {
-        x: rect.left + rect.width / 2,
-        y: rect.top + rect.height / 2,
-        paintable: true,
+        rect,
+        scaleX: rect.width / Math.max(1, wrapper.clientWidth) || 1,
+        scaleY: rect.height / Math.max(1, wrapper.clientHeight) || 1,
       };
-    });
-  }, [chars]);
+    };
 
-  const resetPaint = useCallback(() => {
-    clearStaggerTimers();
-    paintedRef.current.clear();
-    charRefs.current.forEach((node, index) => {
-      if (!node || isSpace(chars[index]!)) return;
-      applyGhostStyle(node);
-    });
-  }, [applyGhostStyle, chars, clearStaggerTimers]);
+    const measureGeometry = () => {
+      const { rect: wrapperRect, scaleX, scaleY } = getLocalSpace();
+      const computedFontSize = Number.parseFloat(
+        window.getComputedStyle(wrapper).fontSize,
+      );
 
-  const scheduleReset = useCallback(() => {
-    if (autoResetMs <= 0) return;
-    if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
-    resetTimerRef.current = setTimeout(() => {
-      resetPaint();
-    }, autoResetMs);
-  }, [autoResetMs, resetPaint]);
+      if (Number.isFinite(computedFontSize)) {
+        brushRadius = Math.max(
+          MINIMUM_BRUSH_RADIUS,
+          computedFontSize * BRUSH_TO_FONT_RATIO,
+        );
+      }
 
-  const paintNearPointer = useCallback(() => {
-    rafRef.current = null;
-    const pointer = pointerRef.current;
-    if (!pointer) return;
+      glyphGeometry = characters.map((character, index) => {
+        const glyph = glyphRefs.current[index];
+        if (!glyph || isSpace(character)) {
+          return { paintable: false, x: 0, y: 0 };
+        }
 
-    const radius = Math.max(brushRadius, 1);
-    const radiusSq = radius * radius;
+        const rect = glyph.getBoundingClientRect();
+        return {
+          paintable: true,
+          x: (rect.left - wrapperRect.left + rect.width / 2) / scaleX,
+          y: (rect.top - wrapperRect.top + rect.height / 2) / scaleY,
+        };
+      });
 
-    type Candidate = { index: number; distance: number };
-    const candidates: Candidate[] = [];
+      previousPointer = currentPointer;
+      pendingSegments = [];
+    };
 
-    centersRef.current.forEach((center, index) => {
-      if (!center.paintable) return;
-      if (paintedRef.current.has(index)) return;
-      if (pendingRef.current.has(index)) return;
-
-      const dx = center.x - pointer.x;
-      const dy = center.y - pointer.y;
-      const distSq = dx * dx + dy * dy;
-      if (distSq > radiusSq) return;
-
-      candidates.push({ index, distance: Math.sqrt(distSq) });
-    });
-
-    if (candidates.length === 0) return;
-
-    candidates.sort((a, b) => a.distance - b.distance);
-
-    const useStagger = !reducedMotionRef.current && staggerMs > 0;
-
-    candidates.forEach(({ index, distance }) => {
-      const node = charRefs.current[index];
-      if (!node) return;
-
-      pendingRef.current.add(index);
-
-      const delay = useStagger ? (distance / radius) * staggerMs : 0;
-
-      const paint = () => {
-        pendingRef.current.delete(index);
-        if (paintedRef.current.has(index)) return;
-        paintedRef.current.add(index);
-        applyPaintStyle(node, false);
+    const toLocalPoint = (point: Point, localSpace: LocalSpace): Point => {
+      const { rect, scaleX, scaleY } = localSpace;
+      return {
+        x: (point.x - rect.left) / scaleX,
+        y: (point.y - rect.top) / scaleY,
       };
+    };
 
-      if (delay <= 0) {
-        paint();
+    const clearResetTimer = () => {
+      if (!resetTimer) return;
+      clearTimeout(resetTimer);
+      resetTimer = null;
+    };
+
+    const ensureAnimation = () => {
+      if (frameId !== null || cancelled) return;
+      clearResetTimer();
+      previousFrameTime = performance.now();
+      frameId = requestAnimationFrame(runFrame);
+    };
+
+    const scheduleNextReset = (currentTime: number) => {
+      if (autoResetMs <= 0 || resetTimer || cancelled) return;
+
+      let earliestResetTime = Number.POSITIVE_INFINITY;
+      for (let index = 0; index < paintProgress.length; index += 1) {
+        if ((paintProgress[index] ?? 0) <= PROGRESS_EPSILON) continue;
+        const lastContactTime = lastContactTimes[index] ?? 0;
+        if (lastContactTime <= 0) continue;
+        earliestResetTime = Math.min(
+          earliestResetTime,
+          lastContactTime + autoResetMs,
+        );
+      }
+
+      if (!Number.isFinite(earliestResetTime)) return;
+      const delay = Math.max(0, earliestResetTime - currentTime);
+      resetTimer = setTimeout(() => {
+        resetTimer = null;
+        ensureAnimation();
+      }, delay);
+    };
+
+    const runFrame: FrameRequestCallback = (currentTime) => {
+      frameId = null;
+      const elapsed = Math.max(1, currentTime - previousFrameTime);
+      previousFrameTime = currentTime;
+      const pointerIsFresh =
+        currentPointer !== null &&
+        (autoResetMs <= 0 ||
+          currentTime - lastPointerMoveTime < autoResetMs);
+      const segments = pendingSegments;
+      pendingSegments = [];
+      const localSpace =
+        pointerIsFresh || segments.length > 0 ? getLocalSpace() : null;
+      const localSegments = localSpace
+        ? segments.map((segment) => ({
+            end: toLocalPoint(segment.end, localSpace),
+            eventTime: segment.eventTime,
+            start: toLocalPoint(segment.start, localSpace),
+          }))
+        : [];
+      const localPointer =
+        currentPointer && localSpace
+          ? toLocalPoint(currentPointer, localSpace)
+          : null;
+      let needsNextFrame = false;
+
+      for (let index = 0; index < glyphGeometry.length; index += 1) {
+        const geometry = glyphGeometry[index];
+        if (!geometry?.paintable) continue;
+
+        let progress = paintProgress[index] ?? 0;
+        const pointerDistance = localPointer
+          ? Math.hypot(
+              geometry.x - localPointer.x,
+              geometry.y - localPointer.y,
+            )
+          : Number.POSITIVE_INFINITY;
+        let minimumDistance = pointerDistance;
+        let latestContactTime = 0;
+
+        for (const segment of localSegments) {
+          const distance = getDistanceToSegment(
+            geometry,
+            segment.start,
+            segment.end,
+          );
+          if (distance < minimumDistance) minimumDistance = distance;
+          if (distance < brushRadius) {
+            latestContactTime = Math.max(
+              latestContactTime,
+              segment.eventTime,
+            );
+          }
+        }
+
+        const falloff = getProximityFalloff(minimumDistance, brushRadius);
+        if (pointerIsFresh && falloff > 0) {
+          lastContactTimes[index] = Math.max(latestContactTime, currentTime);
+
+          const response = reducedMotion
+            ? 1
+            : 1 - Math.exp(-(elapsed * falloff) / PAINT_RESPONSE_MS);
+          const nextProgress = reducedMotion
+            ? 1
+            : progress + (1 - progress) * response;
+          applyProgress(index, nextProgress);
+          progress = nextProgress;
+
+          const pointerFalloff = getProximityFalloff(
+            pointerDistance,
+            brushRadius,
+          );
+          if (
+            !reducedMotion &&
+            pointerFalloff > 0 &&
+            progress < 1 - PROGRESS_EPSILON
+          ) {
+            needsNextFrame = true;
+          }
+          continue;
+        }
+
+        const lastContactTime = lastContactTimes[index] ?? 0;
+        const resetDue =
+          autoResetMs > 0 &&
+          lastContactTime > 0 &&
+          currentTime >= lastContactTime + autoResetMs;
+        if (!resetDue) continue;
+
+        const nextProgress = reducedMotion
+          ? 0
+          : Math.max(0, progress - elapsed / RESET_FADE_MS);
+        applyProgress(index, nextProgress);
+        progress = nextProgress;
+
+        if (progress > PROGRESS_EPSILON) needsNextFrame = true;
+      }
+
+      previousPointer = currentPointer;
+
+      if (needsNextFrame || pendingSegments.length > 0) {
+        frameId = requestAnimationFrame(runFrame);
         return;
       }
 
-      const timer = setTimeout(paint, delay);
-      staggerTimersRef.current.push(timer);
+      scheduleNextReset(currentTime);
+    };
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const point = { x: event.clientX, y: event.clientY };
+      const eventTime = performance.now();
+      const segment: PointerSegment = {
+        end: point,
+        eventTime,
+        start: previousPointer ?? point,
+      };
+
+      previousPointer = point;
+      currentPointer = point;
+      lastPointerMoveTime = eventTime;
+
+      const localSpace = getLocalSpace();
+      if (
+        !segmentIntersectsExpandedRect(
+          segment,
+          localSpace.rect,
+          brushRadius * Math.max(localSpace.scaleX, localSpace.scaleY),
+        )
+      ) {
+        return;
+      }
+
+      pendingSegments.push(segment);
+      if (pendingSegments.length > MAX_PENDING_SEGMENTS) {
+        pendingSegments.splice(
+          0,
+          pendingSegments.length - MAX_PENDING_SEGMENTS,
+        );
+      }
+      ensureAnimation();
+    };
+
+    resetAllGlyphs();
+    measureGeometry();
+
+    const resizeObserver = new ResizeObserver(measureGeometry);
+    resizeObserver.observe(wrapper);
+    window.addEventListener("pointermove", handlePointerMove, {
+      passive: true,
     });
 
-    scheduleReset();
-  }, [applyPaintStyle, brushRadius, scheduleReset, staggerMs]);
-
-  const queuePaint = useCallback(() => {
-    if (rafRef.current != null) return;
-    rafRef.current = window.requestAnimationFrame(paintNearPointer);
-  }, [paintNearPointer]);
-
-  const handlePointerMove = useCallback(
-    (event: React.PointerEvent<HTMLElement>) => {
-      pointerRef.current = { x: event.clientX, y: event.clientY };
-      queuePaint();
-    },
-    [queuePaint],
-  );
-
-  const handlePointerEnter = useCallback(
-    (event: React.PointerEvent<HTMLElement>) => {
-      measureCenters();
-      pointerRef.current = { x: event.clientX, y: event.clientY };
-      queuePaint();
-    },
-    [measureCenters, queuePaint],
-  );
-
-  const handlePointerLeave = useCallback(() => {
-    pointerRef.current = null;
-  }, []);
-
-  useEffect(() => {
-    reducedMotionRef.current = prefersReducedMotion();
-  }, []);
-
-  useEffect(() => {
-    measureCenters();
-    resetPaint();
-
-    const onResize = () => measureCenters();
-    window.addEventListener("resize", onResize);
+    void document.fonts?.ready.then(() => {
+      if (!cancelled) measureGeometry();
+    });
 
     return () => {
-      window.removeEventListener("resize", onResize);
-      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-      if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
-      clearStaggerTimers();
+      cancelled = true;
+      resizeObserver.disconnect();
+      window.removeEventListener("pointermove", handlePointerMove);
+      clearResetTimer();
+      if (frameId !== null) cancelAnimationFrame(frameId);
     };
   }, [
-    measureCenters,
-    resetPaint,
-    clearStaggerTimers,
-    text,
-    font,
-    brushRadius,
+    autoResetMs,
+    characters,
+    font.fontFamily,
+    font.fontSize,
+    font.fontWeight,
+    font.letterSpacing,
+    font.lineHeight,
     ghostColor,
     paintColor,
   ]);
@@ -305,17 +464,12 @@ export default function PaintText(props: Props) {
         justifyContent: "center",
         width: "100%",
         height: "100%",
-        gap: "1.25rem",
         ...style,
       }}
     >
       <p
         ref={wrapperRef}
         aria-label={text}
-        onPointerMove={handlePointerMove}
-        onPointerDown={handlePointerEnter}
-        onPointerEnter={handlePointerEnter}
-        onPointerLeave={handlePointerLeave}
         style={{
           ...font,
           margin: 0,
@@ -327,59 +481,73 @@ export default function PaintText(props: Props) {
           WebkitUserSelect: "none",
         }}
       >
-        {chars.map((char, index) => {
-          if (isSpace(char)) {
+        {characters.map((character, index) => {
+          if (isSpace(character)) {
             return (
-              <span key={`space-${index}`} style={{ whiteSpace: "pre" }}>
-                {char === " " ? "\u00A0" : char}
+              <span
+                key={`space-${index}`}
+                style={{ display: "inline-block", whiteSpace: "pre" }}
+              >
+                {character === " " ? "\u00A0" : character}
               </span>
             );
           }
 
           return (
             <span
-              key={`${char}-${index}`}
-              ref={(node) => {
-                charRefs.current[index] = node;
+              key={`${character}-${index}`}
+              ref={(element) => {
+                glyphRefs.current[index] = element;
               }}
-              aria-hidden="true"
               style={{
+                position: "relative",
                 display: "inline-block",
-                color: ghostColor,
-                opacity: 1,
-                willChange: "color",
+                whiteSpace: "pre",
               }}
             >
-              {char}
+              <span
+                ref={(element) => {
+                  ghostRefs.current[index] = element;
+                }}
+                aria-hidden="true"
+                style={{
+                  display: "inline-block",
+                  color: ghostColor,
+                  opacity: 1,
+                  whiteSpace: "pre",
+                  willChange: "opacity",
+                }}
+              >
+                {character}
+              </span>
+
+              <span
+                ref={(element) => {
+                  paintRefs.current[index] = element;
+                }}
+                aria-hidden="true"
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  display: "inline-block",
+                  color: paintColor,
+                  opacity: 0,
+                  whiteSpace: "pre",
+                  willChange: "opacity",
+                }}
+              >
+                {character}
+              </span>
             </span>
           );
         })}
       </p>
-
-      {showHint && hint ? (
-        <span
-          aria-hidden="true"
-          style={{
-            fontFamily: font.fontFamily,
-            fontSize: "0.875rem",
-            fontWeight: 500,
-            letterSpacing: "0.01em",
-            color: hintColor,
-            pointerEvents: "none",
-            userSelect: "none",
-          }}
-        >
-          {hint}
-        </span>
-      ) : null}
     </div>
   );
 }
 
 PaintText.defaultProps = {
   text: "paint me",
-  hint: "drag your cursor to reveal the words",
-  showHint: true,
   font: {
     fontSize: "72px",
     letterSpacing: "-0.04em",
@@ -388,12 +556,9 @@ PaintText.defaultProps = {
     textAlign: "center",
   },
   paintColor: "#FFFFFF",
-  ghostColor: "#525252",
-  hintColor: "#737373",
-  brushRadius: 56,
+  ghostColor: "rgba(127, 127, 127, 0.22)",
   autoReset: true,
   autoResetDelay: 2.8,
-  transition: DEFAULT_TRANSITION,
 };
 
 addPropertyControls(PaintText, {
@@ -403,21 +568,6 @@ addPropertyControls(PaintText, {
     displayTextArea: true,
     placeholder: "paint me",
   },
-
-  showHint: {
-    type: ControlType.Boolean,
-    title: "Hint",
-    enabledTitle: "Show",
-    disabledTitle: "Hide",
-  },
-
-  hint: {
-    type: ControlType.String,
-    title: "Hint Text",
-    placeholder: "drag your cursor to reveal the words",
-    hidden: (props: Props) => !props.showHint,
-  },
-
   font: {
     type: ControlType.Font,
     title: "Font",
@@ -433,39 +583,20 @@ addPropertyControls(PaintText, {
       textAlign: "center",
     },
   },
-
   ghostColor: {
     type: ControlType.Color,
-    title: "Ghost",
+    title: "Color",
   },
-
   paintColor: {
     type: ControlType.Color,
     title: "Paint",
   },
-
-  hintColor: {
-    type: ControlType.Color,
-    title: "Hint Color",
-    hidden: (props: Props) => !props.showHint,
-  },
-
-  brushRadius: {
-    type: ControlType.Number,
-    title: "Brush Size",
-    min: 12,
-    max: 200,
-    step: 1,
-    unit: "px",
-  },
-
   autoReset: {
     type: ControlType.Boolean,
     title: "Auto Reset",
     enabledTitle: "On",
     disabledTitle: "Off",
   },
-
   autoResetDelay: {
     type: ControlType.Number,
     title: "Reset After",
@@ -474,11 +605,5 @@ addPropertyControls(PaintText, {
     step: 0.1,
     unit: "s",
     hidden: (props: Props) => !props.autoReset,
-  },
-
-  transition: {
-    type: ControlType.Transition,
-    title: "Transition",
-    defaultValue: DEFAULT_TRANSITION,
   },
 });
