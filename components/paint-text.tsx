@@ -11,6 +11,14 @@ type FontStyle = React.CSSProperties & {
   lineHeight?: number | string;
 };
 
+type TransitionValue = {
+  type?: string;
+  duration?: number;
+  delay?: number;
+  ease?: string | number[];
+  staggerChildren?: number;
+};
+
 type Props = {
   text?: string;
   hint?: string;
@@ -20,11 +28,9 @@ type Props = {
   ghostColor?: string;
   hintColor?: string;
   brushRadius?: number;
-  paintDuration?: number;
-  /** Max stagger delay (seconds) from brush center to edge — closest paints first */
-  stagger?: number;
   autoReset?: boolean;
   autoResetDelay?: number;
+  transition?: TransitionValue;
   style?: React.CSSProperties;
 };
 
@@ -35,6 +41,13 @@ const DEFAULT_FONT: FontStyle = {
   letterSpacing: "-0.04em",
   lineHeight: "1.05em",
   textAlign: "center",
+};
+
+const DEFAULT_TRANSITION: TransitionValue = {
+  type: "tween",
+  duration: 0.28,
+  delay: 0.14,
+  ease: "easeOut",
 };
 
 const prefersReducedMotion = (): boolean => {
@@ -61,12 +74,15 @@ export default function PaintText(props: Props) {
     ghostColor = "#525252",
     hintColor = "#737373",
     brushRadius = 56,
-    paintDuration = 0.28,
-    stagger = 0.14,
     autoReset = true,
     autoResetDelay = 2.8,
+    transition = DEFAULT_TRANSITION,
     style,
   } = props;
+
+  // Transition duration → paint time; delay → stagger
+  const paintDuration = transition.duration ?? DEFAULT_TRANSITION.duration ?? 0.28;
+  const stagger = transition.delay ?? DEFAULT_TRANSITION.delay ?? 0.14;
 
   const chars = useMemo(() => Array.from(text ?? ""), [text]);
   const autoResetMs = autoReset ? Math.max(0, autoResetDelay) * 1000 : 0;
@@ -375,10 +391,9 @@ PaintText.defaultProps = {
   ghostColor: "#525252",
   hintColor: "#737373",
   brushRadius: 56,
-  paintDuration: 0.28,
-  stagger: 0.14,
   autoReset: true,
   autoResetDelay: 2.8,
+  transition: DEFAULT_TRANSITION,
 };
 
 addPropertyControls(PaintText, {
@@ -437,29 +452,11 @@ addPropertyControls(PaintText, {
 
   brushRadius: {
     type: ControlType.Number,
-    title: "Brush",
+    title: "Brush Size",
     min: 12,
     max: 200,
     step: 1,
     unit: "px",
-  },
-
-  paintDuration: {
-    type: ControlType.Number,
-    title: "Paint Time",
-    min: 0.05,
-    max: 1.5,
-    step: 0.01,
-    unit: "s",
-  },
-
-  stagger: {
-    type: ControlType.Number,
-    title: "Stagger",
-    min: 0,
-    max: 1,
-    step: 0.01,
-    unit: "s",
   },
 
   autoReset: {
@@ -477,5 +474,11 @@ addPropertyControls(PaintText, {
     step: 0.1,
     unit: "s",
     hidden: (props: Props) => !props.autoReset,
+  },
+
+  transition: {
+    type: ControlType.Transition,
+    title: "Transition",
+    defaultValue: DEFAULT_TRANSITION,
   },
 });

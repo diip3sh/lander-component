@@ -29,8 +29,6 @@ type Props = {
   prefixColor?: string
   blobColor?: string
   blobSize?: number
-  holdDuration?: number
-  wipeDuration?: number
   blur?: number
   transition?: TransitionValue
   style?: React.CSSProperties
@@ -64,11 +62,13 @@ const DEFAULT_FONT: FontStyle = {
 
 const DEFAULT_TRANSITION: TransitionValue = {
   type: "tween",
-  duration: 0.4,
-  delay: 0,
+  duration: 0.55,
+  delay: 1.2,
   ease: "easeOut",
   staggerChildren: 0.06,
 };
+
+const CHAR_REVEAL_DURATION = 0.4;
 
 export default function TextRevealBlur({
   prefix = "Built with",
@@ -78,12 +78,11 @@ export default function TextRevealBlur({
   prefixColor = "#FFFFFF",
   blobColor = "#EF4444",
   blobSize = 12,
-  holdDuration = 1.2,
-  wipeDuration = 0.55,
   blur = 20,
   transition = DEFAULT_TRANSITION,
   style,
 }: Props) {
+  const safeBlobSize = Math.min(Math.max(blobSize, 4), 20);
   const safeTexts = useMemo(() => {
     const list = (texts ?? DEFAULT_TEXTS).filter((t) => t.length > 0);
     return list.length > 0 ? list : DEFAULT_TEXTS;
@@ -94,6 +93,8 @@ export default function TextRevealBlur({
   const wrapperRef = useRef<HTMLSpanElement>(null);
   const charsRef = useRef<(HTMLSpanElement | null)[]>([]);
   const wordIndexRef = useRef(0);
+  const blobSizeRef = useRef(safeBlobSize);
+  blobSizeRef.current = safeBlobSize;
 
   const blobX = useMotionValue(0);
   const blobScaleX = useMotionValue(1);
@@ -107,9 +108,10 @@ export default function TextRevealBlur({
     [currentWord],
   );
 
-  const duration = transition.duration ?? 0.4;
+  // Transition duration → wipe speed; delay → hold time between cycles
+  const wipeDuration = transition.duration ?? DEFAULT_TRANSITION.duration ?? 0.55;
+  const holdDuration = transition.delay ?? DEFAULT_TRANSITION.delay ?? 1.2;
   const staggerEach = transition.staggerChildren ?? 0.06;
-  const transitionDelay = transition.delay ?? 0;
 
   const getCharNodes = useCallback(() => {
     return charsRef.current.filter(
@@ -139,14 +141,14 @@ export default function TextRevealBlur({
 
     const lastRect = nodes[nodes.length - 1]!.getBoundingClientRect()
     const firstRect = nodes[0]!.getBoundingClientRect()
+    const size = blobSizeRef.current
 
-    // Rest just after the last glyph (gap ≈ half blob)
-    const homeX = toLocalX(lastRect.right) + blobSize * 0.35
-    // Start just before the first glyph
-    const leftX = Math.max(0, toLocalX(firstRect.left) - blobSize * 0.65)
+    // blobX is the blob center — rests like a period just after the last glyph
+    const homeX = toLocalX(lastRect.right) + size * 0.65
+    const leftX = Math.max(size * 0.5, toLocalX(firstRect.left) - size * 0.65)
 
     return { centers, homeX, leftX, nodes }
-  }, [blobSize, getCharNodes])
+  }, [getCharNodes])
 
   const measureLayoutRef = useRef(measureLayout);
   measureLayoutRef.current = measureLayout;
@@ -229,10 +231,12 @@ export default function TextRevealBlur({
       centers: number[],
       x: number,
     ) => {
+      const size = blobSizeRef.current;
       nodes.forEach((node, i) => {
         const center = centers[i];
         if (center === undefined) return;
-        if (x <= center + blobSize * 0.25) {
+        // x is blob center
+        if (x <= center + size * 0.25) {
           node.style.opacity = "0";
           node.style.filter = `blur(${blur}px)`;
           node.style.transform = `scale(${START_SCALE})`;
@@ -253,21 +257,19 @@ export default function TextRevealBlur({
         const revealed = new Set<number>();
         const charCount = Math.max(nodes.length, 1);
 
-        const blobDuration = Math.max(
-          transitionDelay + (charCount - 1) * staggerEach,
-          0.12,
-        );
+        const blobDuration = Math.max((charCount - 1) * staggerEach, 0.12);
 
         activeAnim = animate(blobX, homeX, {
           duration: blobDuration,
           ease: "linear",
           onUpdate: (x) => {
+            const size = blobSizeRef.current;
             nodes.forEach((node, i) => {
               if (revealed.has(i)) return;
               const center = centers[i];
               if (center === undefined) return;
 
-              if (x >= center - blobSize * 0.35) {
+              if (x >= center - size * 0.35) {
                 revealed.add(i);
                 charAnim = animate(
                   node,
@@ -278,7 +280,7 @@ export default function TextRevealBlur({
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                   } as any,
                   {
-                    duration,
+                    duration: CHAR_REVEAL_DURATION,
                     ease: "easeOut",
                   },
                 );
@@ -297,7 +299,7 @@ export default function TextRevealBlur({
                   filter: [`blur(${blur}px)`, "blur(0px)"],
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 } as any,
-                { duration, ease: "easeOut" },
+                { duration: CHAR_REVEAL_DURATION, ease: "easeOut" },
               );
             });
 
@@ -306,7 +308,7 @@ export default function TextRevealBlur({
             holdTimer = setTimeout(() => {
               setCharsVisible(nodes);
               resolve();
-            }, duration * 1000);
+            }, CHAR_REVEAL_DURATION * 1000);
           },
         });
       });
@@ -323,6 +325,7 @@ export default function TextRevealBlur({
         layout = await waitForLayout();
         if (!layout || cancelled) break;
 
+        // Remeasure so home tracks current blob size while parked
         blobX.set(layout.homeX);
         setBlobDeform("rest");
         setCharsVisible(layout.nodes);
@@ -330,7 +333,8 @@ export default function TextRevealBlur({
         await wait(holdDuration * 1000);
         if (cancelled) break;
 
-        const wipeLayout = layout;
+        const wipeLayout = await waitForLayout();
+        if (!wipeLayout || cancelled) break;
 
         // Moving right → left: stretch into the left (lead), squash height
         setBlobDeform("left");
@@ -386,15 +390,27 @@ export default function TextRevealBlur({
     holdDuration,
     wipeDuration,
     blur,
-    blobSize,
     blobX,
     blobScaleX,
     blobScaleY,
     waitForLayout,
-    duration,
     staggerEach,
-    transitionDelay,
   ]);
+
+  // When blob size changes while idle, snap home to the new center-aware position
+  useEffect(() => {
+    const layout = measureLayoutRef.current();
+    if (!layout) return;
+    // Only nudge if we're roughly at rest near home (not mid-wipe/reveal)
+    const current = blobX.get();
+    const nearHome = Math.abs(current - layout.homeX) < safeBlobSize * 2;
+    const nearLeft = Math.abs(current - layout.leftX) < safeBlobSize * 2;
+    if (nearHome) {
+      blobX.set(layout.homeX);
+    } else if (nearLeft) {
+      blobX.set(layout.leftX);
+    }
+  }, [safeBlobSize, blobX]);
 
   const textAlign =
     (font.textAlign as React.CSSProperties["textAlign"]) ?? "left";
@@ -478,24 +494,23 @@ export default function TextRevealBlur({
           aria-hidden="true"
           style={{
             position: "absolute",
-            // Sit on the text baseline / x-height band, not below the line box
-            top: "50%",
+            // Period-style: sit on the baseline; size grows up/out from bottom-center
+            bottom: "0.08em",
             left: 0,
             x: blobX,
-            y: "-50%",
             scaleX: blobScaleX,
             scaleY: blobScaleY,
             transformOrigin: blobOrigin,
-            width: blobSize,
-            height: blobSize,
-            marginTop: blobSize * 0.45,
+            width: safeBlobSize,
+            height: safeBlobSize,
+            marginLeft: safeBlobSize / -2,
             borderRadius: blobRadius,
             backgroundColor: blobColor,
             display: "block",
             pointerEvents: "none",
-            willChange: "transform, border-radius",
+            willChange: "transform, border-radius, width, height",
             transition:
-              "border-radius 180ms cubic-bezier(.215, .61, .355, 1)",
+              "width 180ms cubic-bezier(.215, .61, .355, 1), height 180ms cubic-bezier(.215, .61, .355, 1), border-radius 180ms cubic-bezier(.215, .61, .355, 1), margin-left 180ms cubic-bezier(.215, .61, .355, 1)",
           }}
         />
       </span>
@@ -517,16 +532,8 @@ TextRevealBlur.defaultProps = {
     prefixColor: "#FFFFFF",
     blobColor: "#EF4444",
     blobSize: 12,
-    holdDuration: 1.2,
-    wipeDuration: 0.55,
     blur: 20,
-    transition: {
-        type: "tween",
-        duration: 0.4,
-        delay: 0,
-        ease: "easeOut",
-        staggerChildren: 0.06,
-    },
+    transition: DEFAULT_TRANSITION,
 }
 
 addPropertyControls(TextRevealBlur, {
@@ -580,27 +587,9 @@ addPropertyControls(TextRevealBlur, {
         type: ControlType.Number,
         title: "Blob Size",
         min: 4,
-        max: 48,
+        max: 20,
         step: 1,
         unit: "px",
-    },
-
-    holdDuration: {
-        type: ControlType.Number,
-        title: "Hold",
-        min: 0.2,
-        max: 5,
-        step: 0.1,
-        unit: "s",
-    },
-
-    wipeDuration: {
-        type: ControlType.Number,
-        title: "Wipe",
-        min: 0.1,
-        max: 2,
-        step: 0.05,
-        unit: "s",
     },
 
     blur: {
@@ -615,12 +604,6 @@ addPropertyControls(TextRevealBlur, {
     transition: {
         type: ControlType.Transition,
         title: "Transition",
-        defaultValue: {
-            type: "tween",
-            duration: 0.4,
-            delay: 0,
-            ease: "easeOut",
-            staggerChildren: 0.06,
-        },
+        defaultValue: DEFAULT_TRANSITION,
     },
 })

@@ -30,7 +30,6 @@ type Props = {
     font: FontStyle
     color: string
     flipColor: string
-    staggerDuration: number
     staggerFrom: StaggerFrom
     rotateDirection: RotateDirection
     transition: TransitionValue
@@ -165,7 +164,6 @@ export default function Text3DFlip({
     font,
     color,
     flipColor,
-    staggerDuration = 0.05,
     staggerFrom = "first",
     rotateDirection = "right",
     transition,
@@ -176,6 +174,8 @@ export default function Text3DFlip({
     const [scope, animate] = useAnimate()
 
     const rotationTransform = ROTATION_MAP[rotateDirection]
+    // Transition delay → per-character stagger
+    const staggerDuration = transition?.delay ?? 0.05
 
     useEffect(() => {
         isMountedRef.current = true
@@ -238,6 +238,7 @@ export default function Text3DFlip({
                 { transform: rotationTransform },
                 {
                     ...mapped,
+                    // Per-char stagger from transition.delay (not a global delay)
                     delay: (i: number) => delays[i] ?? 0,
                 },
             )
@@ -341,14 +342,13 @@ Text3DFlip.defaultProps = {
     },
     color: "#FFFFFF",
     flipColor: "#A78BFA",
-    staggerDuration: 0.05,
     staggerFrom: "first",
     rotateDirection: "right",
     transition: {
         type: "spring",
         damping: 30,
         stiffness: 300,
-        delay: 0,
+        delay: 0.05,
     },
 }
 
@@ -390,7 +390,7 @@ addPropertyControls(Text3DFlip, {
         title: "Direction",
         options: ["top", "right", "bottom", "left"],
         optionTitles: ["Top", "Right", "Bottom", "Left"],
-        displaySegmentedControl: true,
+        displaySegmentedControl: false,
     },
 
     staggerFrom: {
@@ -400,15 +400,6 @@ addPropertyControls(Text3DFlip, {
         optionTitles: ["First", "Last", "Center", "Random"],
     },
 
-    staggerDuration: {
-        type: ControlType.Number,
-        title: "Stagger",
-        min: 0,
-        max: 0.5,
-        step: 0.01,
-        unit: "s",
-    },
-
     transition: {
         type: ControlType.Transition,
         title: "Transition",
@@ -416,7 +407,7 @@ addPropertyControls(Text3DFlip, {
             type: "spring",
             damping: 30,
             stiffness: 300,
-            delay: 0,
+            delay: 0.05,
         },
     },
 })

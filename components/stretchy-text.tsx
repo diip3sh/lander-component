@@ -20,30 +20,12 @@ type FontStyle = React.CSSProperties & {
     lineHeight?: number | string
 }
 
-type TransitionValue = {
-    type?: string
-    stiffness?: number
-    damping?: number
-    mass?: number
-    duration?: number
-    delay?: number
-    ease?: string | number[]
-    bounce?: number
-}
-
 type Props = {
     text?: string
-    hint?: string
-    showHint?: boolean
     font?: FontStyle
     color?: string
-    hintColor?: string
-    /** Geometric falloff per step (0–1). Higher = stronger neighbor pull. */
-    falloff?: number
-    /** Max index distance that still receives pull. */
-    maxDistance?: number
-    dragTransition?: TransitionValue
-    releaseTransition?: TransitionValue
+    /** How strongly neighbors follow the dragged letter (0–20). */
+    follow?: number
     style?: React.CSSProperties
 }
 
@@ -59,40 +41,17 @@ const DEFAULT_FONT: FontStyle = {
     textAlign: "center",
 }
 
-const DEFAULT_DRAG_TRANSITION: TransitionValue = {
-    type: "spring",
+const DRAG_SPRING: SpringOptions = {
     stiffness: 520,
     damping: 38,
     mass: 0.4,
 }
 
-const DEFAULT_RELEASE_TRANSITION: TransitionValue = {
+const RELEASE_SPRING: SpringOptions & { type: "spring" } = {
     type: "spring",
     stiffness: 240,
     damping: 13,
     mass: 0.75,
-}
-
-const toSpringOptions = (
-    transition: TransitionValue | undefined,
-    fallback: TransitionValue,
-): SpringOptions => {
-    const t = transition ?? fallback
-    return {
-        stiffness: t.stiffness ?? fallback.stiffness ?? 300,
-        damping: t.damping ?? fallback.damping ?? 20,
-        mass: t.mass ?? fallback.mass ?? 0.5,
-    }
-}
-
-const toReleaseTransition = (
-    transition: TransitionValue | undefined,
-): SpringOptions & { type: "spring" } => {
-    const spring = toSpringOptions(transition, DEFAULT_RELEASE_TRANSITION)
-    return {
-        type: "spring",
-        ...spring,
-    }
 }
 
 const prefersReducedMotion = (): boolean => {
@@ -100,23 +59,25 @@ const prefersReducedMotion = (): boolean => {
     return window.matchMedia("(prefers-reduced-motion: reduce)").matches
 }
 
-const isBreakpoint = (char: string): boolean =>
-    char === " " || char === "\n" || char === "\t"
+const isLineBreak = (char: string): boolean => char === "\n"
 
-/** Distance along the glyph chain; null if a space/newline breaks the path. */
+const isSpaceLike = (char: string): boolean =>
+    char === " " || char === "\t"
+
+/** Distance along the glyph chain on the same line; null if a newline breaks the path. Spaces count as characters. */
 const getChainDistance = (
     from: number,
     to: number,
     chars: string[],
 ): number | null => {
     if (from === to) return 0
-    if (isBreakpoint(chars[from]!) || isBreakpoint(chars[to]!)) return null
+    if (isLineBreak(chars[from]!) || isLineBreak(chars[to]!)) return null
 
     const lo = Math.min(from, to)
     const hi = Math.max(from, to)
 
     for (let i = lo + 1; i < hi; i += 1) {
-        if (isBreakpoint(chars[i]!)) return null
+        if (isLineBreak(chars[i]!)) return null
     }
 
     return hi - lo
@@ -127,7 +88,6 @@ type LetterProps = {
     index: number
     color: string
     reducedMotion: boolean
-    dragSpring: SpringOptions
     registerMotion: (index: number, pair: LetterMotion | null) => void
     onLetterPointerDown: (
         index: number,
@@ -140,15 +100,14 @@ const ElasticLetter = ({
     index,
     color,
     reducedMotion,
-    dragSpring,
     registerMotion,
     onLetterPointerDown,
 }: LetterProps) => {
-    const x = useSpring(0, dragSpring)
-    const y = useSpring(0, dragSpring)
+    const x = useSpring(0, DRAG_SPRING)
+    const y = useSpring(0, DRAG_SPRING)
 
     useEffect(() => {
-        if (isBreakpoint(char)) {
+        if (isLineBreak(char)) {
             registerMotion(index, null)
             return
         }
@@ -157,10 +116,10 @@ const ElasticLetter = ({
         return () => registerMotion(index, null)
     }, [char, index, registerMotion, x, y])
 
-    if (isBreakpoint(char)) {
+    if (isLineBreak(char)) {
         return (
             <span aria-hidden="true" style={{ whiteSpace: "pre" }}>
-                {char === " " ? "\u00A0" : char}
+                {char}
             </span>
         )
     }
@@ -179,9 +138,10 @@ const ElasticLetter = ({
                 userSelect: "none",
                 WebkitUserSelect: "none",
                 willChange: "transform",
+                whiteSpace: isSpaceLike(char) ? "pre" : undefined,
             }}
         >
-            {char}
+            {char === " " ? "\u00A0" : char}
         </motion.span>
     )
 }
@@ -195,26 +155,15 @@ const ElasticLetter = ({
 export default function StretchyText(props: Props) {
     const {
         text = "STRETCHY",
-        hint = "drag any letter",
-        showHint = true,
         font = DEFAULT_FONT,
         color = "#FFFFFF",
-        hintColor = "#A3A3A3",
-        falloff = 0.58,
-        maxDistance = 8,
-        dragTransition = DEFAULT_DRAG_TRANSITION,
-        releaseTransition = DEFAULT_RELEASE_TRANSITION,
+        follow = 12,
         style,
     } = props
 
-    const dragSpring = useMemo(
-        () => toSpringOptions(dragTransition, DEFAULT_DRAG_TRANSITION),
-        [dragTransition],
-    )
-    const releaseSpring = useMemo(
-        () => toReleaseTransition(releaseTransition),
-        [releaseTransition],
-    )
+    const safeFollow = Math.min(20, Math.max(0, Math.round(follow)))
+    // Map 0–20 → 0–1 geometric falloff used along the letter chain
+    const followStrength = safeFollow / 20
 
     const chars = useMemo(() => Array.from(text || "STRETCHY"), [text])
     const motionsRef = useRef<(LetterMotion | null)[]>([])
@@ -223,7 +172,6 @@ export default function StretchyText(props: Props) {
     const originRef = useRef({ x: 0, y: 0 })
     const draggingRef = useRef(false)
 
-    const [dragging, setDragging] = useState(false)
     const [reducedMotion, setReducedMotion] = useState(false)
 
     useEffect(() => {
@@ -252,10 +200,11 @@ export default function StretchyText(props: Props) {
 
             chars.forEach((char, index) => {
                 const pair = motionsRef.current[index]
-                if (!pair || isBreakpoint(char)) return
+                if (!pair || isLineBreak(char)) return
 
                 const distance = getChainDistance(active, index, chars)
-                if (distance == null || distance > maxDistance) {
+                // Same-line chain includes spaces; only newlines break the path
+                if (distance == null) {
                     pair.x.set(0)
                     pair.y.set(0)
                     return
@@ -272,12 +221,12 @@ export default function StretchyText(props: Props) {
                     return
                 }
 
-                const strength = Math.pow(falloff, distance)
+                const strength = Math.pow(followStrength, distance)
                 pair.x.set(deltaX * strength)
                 pair.y.set(deltaY * strength)
             })
         },
-        [chars, falloff, maxDistance],
+        [chars, followStrength],
     )
 
     const handlePointerUp = useCallback(() => {
@@ -285,21 +234,20 @@ export default function StretchyText(props: Props) {
 
         draggingRef.current = false
         activeIndexRef.current = null
-        setDragging(false)
 
         stopAnims()
         motionsRef.current.forEach((pair) => {
             if (!pair) return
             animControlsRef.current.push(
-                animate(pair.x, 0, releaseSpring),
-                animate(pair.y, 0, releaseSpring),
+                animate(pair.x, 0, RELEASE_SPRING),
+                animate(pair.y, 0, RELEASE_SPRING),
             )
         })
 
         window.removeEventListener("pointermove", handlePointerMove)
         window.removeEventListener("pointerup", handlePointerUp)
         window.removeEventListener("pointercancel", handlePointerUp)
-    }, [handlePointerMove, releaseSpring, stopAnims])
+    }, [handlePointerMove, stopAnims])
 
     const handleLetterPointerDown = useCallback(
         (index: number, event: React.PointerEvent<HTMLSpanElement>) => {
@@ -313,7 +261,6 @@ export default function StretchyText(props: Props) {
             draggingRef.current = true
             activeIndexRef.current = index
             originRef.current = { x: event.clientX, y: event.clientY }
-            setDragging(true)
 
             window.addEventListener("pointermove", handlePointerMove)
             window.addEventListener("pointerup", handlePointerUp)
@@ -340,8 +287,6 @@ export default function StretchyText(props: Props) {
               ? "flex-end"
               : "center"
 
-    const springKey = `${dragSpring.stiffness}-${dragSpring.damping}-${dragSpring.mass}`
-
     return (
         <div
             style={{
@@ -352,7 +297,6 @@ export default function StretchyText(props: Props) {
                 justifyContent: "center",
                 width: "100%",
                 height: "100%",
-                gap: "1.25rem",
                 ...style,
             }}
         >
@@ -368,44 +312,22 @@ export default function StretchyText(props: Props) {
             >
                 {chars.map((char, index) => (
                     <ElasticLetter
-                        key={`${char}-${index}-${springKey}`}
+                        key={`${char}-${index}`}
                         char={char}
                         index={index}
                         color={color}
                         reducedMotion={reducedMotion}
-                        dragSpring={dragSpring}
                         registerMotion={registerMotion}
                         onLetterPointerDown={handleLetterPointerDown}
                     />
                 ))}
             </p>
-
-            {showHint && hint ? (
-                <span
-                    aria-hidden="true"
-                    style={{
-                        fontFamily: font.fontFamily,
-                        fontSize: "0.875rem",
-                        fontWeight: 500,
-                        letterSpacing: "0.01em",
-                        color: hintColor,
-                        opacity: dragging ? 0 : 1,
-                        transition: "opacity 200ms ease",
-                        pointerEvents: "none",
-                        userSelect: "none",
-                    }}
-                >
-                    {hint}
-                </span>
-            ) : null}
         </div>
     )
 }
 
 StretchyText.defaultProps = {
     text: "STRETCHY",
-    hint: "drag any letter",
-    showHint: true,
     font: {
         fontSize: "72px",
         letterSpacing: "-0.04em",
@@ -414,11 +336,7 @@ StretchyText.defaultProps = {
         textAlign: "center",
     },
     color: "#FFFFFF",
-    hintColor: "#A3A3A3",
-    falloff: 0.58,
-    maxDistance: 8,
-    dragTransition: DEFAULT_DRAG_TRANSITION,
-    releaseTransition: DEFAULT_RELEASE_TRANSITION,
+    follow: 12,
 }
 
 addPropertyControls(StretchyText, {
@@ -426,20 +344,6 @@ addPropertyControls(StretchyText, {
         type: ControlType.String,
         title: "Text",
         placeholder: "STRETCHY",
-    },
-
-    showHint: {
-        type: ControlType.Boolean,
-        title: "Hint",
-        enabledTitle: "Show",
-        disabledTitle: "Hide",
-    },
-
-    hint: {
-        type: ControlType.String,
-        title: "Hint Text",
-        placeholder: "drag any letter",
-        hidden: (props: Props) => !props.showHint,
     },
 
     font: {
@@ -463,40 +367,13 @@ addPropertyControls(StretchyText, {
         title: "Color",
     },
 
-    hintColor: {
-        type: ControlType.Color,
-        title: "Hint Color",
-        hidden: (props: Props) => !props.showHint,
-    },
-
-    falloff: {
+    follow: {
         type: ControlType.Number,
-        title: "Falloff",
-        min: 0.15,
-        max: 0.95,
-        step: 0.01,
-        description: "How strongly neighbors follow the dragged letter",
-    },
-
-    maxDistance: {
-        type: ControlType.Number,
-        title: "Reach",
-        min: 1,
+        title: "Follow",
+        min: 0,
         max: 20,
         step: 1,
-        displayStepper: true,
-        description: "How many letters away the pull still reaches",
-    },
-
-    dragTransition: {
-        type: ControlType.Transition,
-        title: "Drag Spring",
-        defaultValue: DEFAULT_DRAG_TRANSITION,
-    },
-
-    releaseTransition: {
-        type: ControlType.Transition,
-        title: "Release Spring",
-        defaultValue: DEFAULT_RELEASE_TRANSITION,
+        displayStepper: false,
+        description: "How strongly neighbors follow the dragged letter",
     },
 })

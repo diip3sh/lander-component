@@ -12,24 +12,27 @@ type FontStyle = React.CSSProperties & {
     lineHeight?: number | string
 }
 
+type TransitionValue = {
+    type?: string
+    duration?: number
+    delay?: number
+    ease?: string | number[]
+    staggerChildren?: number
+}
+
 type Props = {
     prefix?: string
     texts?: string[]
     font?: FontStyle
     color?: string
     prefixColor?: string
-    caretColor?: string
-    caretBorderColor?: string
-    caretWidth?: number
-    caretHeight?: number
-    typingSpeed?: number
+    cursorColor?: string
+    cursorBorderColor?: string
+    cursorWidth?: number
+    cursorHeight?: number
     deletingSpeed?: number
-    holdDuration?: number
-    loop?: boolean
     soundEnabled?: boolean
-    soundFile?: string
-    deleteSoundFile?: string
-    soundVolume?: number
+    transition?: TransitionValue
     style?: React.CSSProperties
 }
 
@@ -55,6 +58,15 @@ const DEFAULT_FONT: FontStyle = {
     textAlign: "left",
 }
 
+const DEFAULT_TRANSITION: TransitionValue = {
+    type: "tween",
+    duration: 0.055,
+    delay: 1.8,
+    ease: "linear",
+}
+
+const SOUND_VOLUME = 0.45
+
 const prefersReducedMotion = (): boolean => {
     if (typeof window === "undefined") return false
     return window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -75,25 +87,22 @@ export default function TypewriterText(props: Props) {
         font = DEFAULT_FONT,
         color = "#FFFFFF",
         prefixColor = "#FFFFFF",
-        caretColor = "#1A1A1A",
-        caretBorderColor = "#404040",
-        caretWidth = 0.38,
-        caretHeight = 0.92,
-        typingSpeed = 55,
+        cursorColor = "#1A1A1A",
+        cursorBorderColor = "#404040",
+        cursorWidth = 12,
+        cursorHeight = 40,
         deletingSpeed = 32,
-        holdDuration = 1.8,
-        loop = true,
         soundEnabled = true,
-        soundFile = "",
-        deleteSoundFile = "",
-        soundVolume = 45,
+        transition = DEFAULT_TRANSITION,
         style,
     } = props
 
-    const soundSrc = soundFile?.trim() ? soundFile : EMBEDDED_SOUND
-    const deleteSoundSrc = deleteSoundFile?.trim()
-        ? deleteSoundFile
-        : EMBEDDED_DELETE_SOUND
+    // Transition duration → type speed (seconds per character); delay → hold
+    const typingSpeed = Math.max(
+        20,
+        Math.round((transition.duration ?? DEFAULT_TRANSITION.duration ?? 0.055) * 1000),
+    )
+    const holdDuration = transition.delay ?? DEFAULT_TRANSITION.delay ?? 1.8
 
     const effectiveTypingSpeed = soundEnabled
         ? Math.max(typingSpeed, 130)
@@ -112,7 +121,7 @@ export default function TypewriterText(props: Props) {
     const [textIndex, setTextIndex] = useState(0)
     const [charIndex, setCharIndex] = useState(0)
     const [phase, setPhase] = useState<Phase>("typing")
-    const [caretOn, setCaretOn] = useState(true)
+    const [cursorOn, setCursorOn] = useState(true)
 
     const typeAudioRef = useRef<HTMLAudioElement | null>(null)
     const deleteAudioRef = useRef<HTMLAudioElement | null>(null)
@@ -125,15 +134,14 @@ export default function TypewriterText(props: Props) {
     useEffect(() => {
         if (!soundEnabled) return
 
-        const vol = Math.min(1, Math.max(0, soundVolume / 100))
-        const typeAudio = new Audio(soundSrc)
+        const typeAudio = new Audio(EMBEDDED_SOUND)
         typeAudio.preload = "auto"
-        typeAudio.volume = vol
+        typeAudio.volume = SOUND_VOLUME
         typeAudioRef.current = typeAudio
 
-        const deleteAudio = new Audio(deleteSoundSrc)
+        const deleteAudio = new Audio(EMBEDDED_DELETE_SOUND)
         deleteAudio.preload = "auto"
-        deleteAudio.volume = vol
+        deleteAudio.volume = SOUND_VOLUME
         deleteAudioRef.current = deleteAudio
 
         const unlock = () => {
@@ -166,7 +174,7 @@ export default function TypewriterText(props: Props) {
             typeAudioRef.current = null
             deleteAudioRef.current = null
         }
-    }, [soundEnabled, soundSrc, deleteSoundSrc, soundVolume])
+    }, [soundEnabled])
 
     const playTick = useCallback(
         (base: HTMLAudioElement | null) => {
@@ -206,18 +214,18 @@ export default function TypewriterText(props: Props) {
         setTextIndex(0)
         setCharIndex(0)
         setPhase("typing")
-        setCaretOn(true)
+        setCursorOn(true)
         prevCharIndexRef.current = 0
     }, [safeTexts])
 
     useEffect(() => {
         if (phase !== "holding") {
-            setCaretOn(true)
+            setCursorOn(true)
             return
         }
 
         const id = window.setInterval(() => {
-            setCaretOn((prev) => !prev)
+            setCursorOn((prev) => !prev)
         }, 530)
 
         return () => window.clearInterval(id)
@@ -243,7 +251,6 @@ export default function TypewriterText(props: Props) {
             }
         } else if (phase === "holding") {
             timer = setTimeout(() => {
-                if (!loop && textIndex >= safeTexts.length - 1) return
                 setPhase("deleting")
             }, holdMs)
         } else if (phase === "deleting") {
@@ -267,8 +274,6 @@ export default function TypewriterText(props: Props) {
         effectiveTypingSpeed,
         effectiveDeletingSpeed,
         holdDuration,
-        loop,
-        textIndex,
         safeTexts.length,
     ])
 
@@ -298,14 +303,14 @@ export default function TypewriterText(props: Props) {
                     style={{
                         display: "inline-block",
                         boxSizing: "border-box",
-                        width: `${caretWidth}em`,
-                        height: `${caretHeight}em`,
+                        width: cursorWidth,
+                        height: cursorHeight,
                         marginLeft: "0.08em",
                         verticalAlign: "-0.08em",
-                        backgroundColor: caretColor,
-                        border: `1.5px solid ${caretBorderColor}`,
+                        backgroundColor: cursorColor,
+                        border: `1.5px solid ${cursorBorderColor}`,
                         borderRadius: 2,
-                        opacity: caretOn ? 1 : 0,
+                        opacity: cursorOn ? 1 : 0,
                         willChange: "opacity",
                     }}
                 />
@@ -344,18 +349,13 @@ TypewriterText.defaultProps = {
     },
     color: "#FFFFFF",
     prefixColor: "#FFFFFF",
-    caretColor: "#1A1A1A",
-    caretBorderColor: "#404040",
-    caretWidth: 0.38,
-    caretHeight: 0.92,
-    typingSpeed: 55,
+    cursorColor: "#1A1A1A",
+    cursorBorderColor: "#404040",
+    cursorWidth: 12,
+    cursorHeight: 40,
     deletingSpeed: 32,
-    holdDuration: 1.8,
-    loop: true,
     soundEnabled: true,
-    soundFile: "",
-    deleteSoundFile: "",
-    soundVolume: 45,
+    transition: DEFAULT_TRANSITION,
 }
 
 addPropertyControls(TypewriterText, {
@@ -401,41 +401,32 @@ addPropertyControls(TypewriterText, {
         title: "Text Color",
     },
 
-    caretColor: {
+    cursorColor: {
         type: ControlType.Color,
-        title: "Caret Fill",
+        title: "Cursor Fill",
     },
 
-    caretBorderColor: {
+    cursorBorderColor: {
         type: ControlType.Color,
-        title: "Caret Border",
+        title: "Cursor Border",
     },
 
-    caretWidth: {
+    cursorWidth: {
         type: ControlType.Number,
-        title: "Caret Width",
-        min: 0.08,
-        max: 1,
-        step: 0.01,
-        unit: "em",
+        title: "Cursor Width",
+        min: 2,
+        max: 40,
+        step: 1,
+        unit: "px",
     },
 
-    caretHeight: {
+    cursorHeight: {
         type: ControlType.Number,
-        title: "Caret Height",
-        min: 0.4,
-        max: 1.4,
-        step: 0.01,
-        unit: "em",
-    },
-
-    typingSpeed: {
-        type: ControlType.Number,
-        title: "Type Speed",
-        min: 20,
-        max: 300,
-        step: 5,
-        unit: "ms",
+        title: "Cursor Height",
+        min: 8,
+        max: 80,
+        step: 1,
+        unit: "px",
     },
 
     deletingSpeed: {
@@ -447,22 +438,6 @@ addPropertyControls(TypewriterText, {
         unit: "ms",
     },
 
-    holdDuration: {
-        type: ControlType.Number,
-        title: "Hold",
-        min: 0.2,
-        max: 5,
-        step: 0.1,
-        unit: "s",
-    },
-
-    loop: {
-        type: ControlType.Boolean,
-        title: "Loop",
-        enabledTitle: "On",
-        disabledTitle: "Off",
-    },
-
     soundEnabled: {
         type: ControlType.Boolean,
         title: "Sound",
@@ -470,27 +445,9 @@ addPropertyControls(TypewriterText, {
         disabledTitle: "Off",
     },
 
-    soundFile: {
-        type: ControlType.File,
-        title: "Type Sound",
-        allowedFileTypes: ["mp3", "wav", "ogg", "m4a"],
-        hidden: (props: Props) => !props.soundEnabled,
-    },
-
-    deleteSoundFile: {
-        type: ControlType.File,
-        title: "Delete Sound",
-        allowedFileTypes: ["mp3", "wav", "ogg", "m4a"],
-        hidden: (props: Props) => !props.soundEnabled,
-    },
-
-    soundVolume: {
-        type: ControlType.Number,
-        title: "Volume",
-        min: 0,
-        max: 100,
-        step: 1,
-        unit: "%",
-        hidden: (props: Props) => !props.soundEnabled,
+    transition: {
+        type: ControlType.Transition,
+        title: "Transition",
+        defaultValue: DEFAULT_TRANSITION,
     },
 })
